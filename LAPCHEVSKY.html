@@ -112,7 +112,7 @@
   </div>
   <div class="ctrl">
     <label>Ставка НДС, %</label>
-    <input type="number" id="vatRate" value="20" min="0" max="30" step="0.5">
+    <input type="number" id="vatRate" value="22" min="0" max="30" step="0.5">
   </div>
   <div class="ctrl">
     <label>&nbsp;</label>
@@ -183,6 +183,42 @@
     </div>
     <div class="chartbox sm"><canvas id="chartBE"></canvas></div>
   </div>
+</div>
+
+<div class="panel" style="margin-bottom:20px">
+  <h2>Окупаемость проекта и возврат инвестиций <span class="tag">кэшфлоу (с НДС) + прибыль (без НДС) · с учётом отсрочки оплат</span></h2>
+  <div class="controls" style="margin-bottom:16px">
+    <div class="ctrl"><label>Прогноз отгрузок, ₽/мес (база)</label><input type="number" id="baseRun" value="635762" step="10000"></div>
+    <div class="ctrl"><label>Рост в месяц, %</label><input type="number" id="growthPct" value="0" step="1"></div>
+    <div class="ctrl"><label>Отсрочка оплаты, дней</label><input type="number" id="deferDays" value="40" step="5"></div>
+  </div>
+  <div class="kpis" id="payKpis"></div>
+  <div class="chartbox"><canvas id="chartPay"></canvas></div>
+  <div class="note" id="payNote"></div>
+</div>
+
+<div class="panel" style="margin-bottom:20px">
+  <h2>Окупаемость по чистой прибыли <span class="tag">валовая прибыль (без НДС) − разовые расходы · накопительно</span></h2>
+  <div class="controls" style="margin-bottom:16px">
+    <div class="ctrl"><label>Планка возврата (что отбиваем)</label>
+      <select id="npBaseMode">
+        <option value="peak">Пиковый вложенный капитал (авто)</option>
+        <option value="fixed">Разовые расходы (лог.+декл.)</option>
+        <option value="manual">Задать вручную →</option>
+      </select>
+    </div>
+    <div class="ctrl"><label>Сумма вручную, ₽</label><input type="number" id="npBaseManual" value="" step="50000" placeholder="напр. 1500000"></div>
+  </div>
+  <div class="kpis" id="npKpis"></div>
+  <div class="chartbox"><canvas id="chartNetProfit"></canvas></div>
+  <div class="note" id="npNote"></div>
+</div>
+
+<div class="panel" style="margin-bottom:20px">
+  <h2>Прогноз отгрузок и оплат до конца года <span class="tag">факт мар–июн · прогноз июл–дек (run-rate)</span></h2>
+  <div class="chartbox"><canvas id="chartForecast"></canvas></div>
+  <div class="tablewrap" style="margin-top:14px;max-height:none"><table id="fcTbl"></table></div>
+  <div class="note">Прогноз отгрузок = базовый run-rate (среднее стабильных месяцев март/май/июнь, без апрельского всплеска первичной загрузки) с настраиваемым ростом. Оплаты сдвинуты на срок отсрочки. Янв*/Фев* — хвост сбора оплат за ноябрь–декабрь.</div>
 </div>
 
 <div class="footer">
@@ -403,8 +439,121 @@ function drawBreakeven(){
             y:{ticks:{color:"#8b9aab",callback:v=>fmt(v)},grid:{color:"#2e3a48"}}}}});
 }
 
-function render(){ kpiHTML(); buildTable(); drawMain(); drawMonthly(); drawBreakeven(); }
-function recalc(){ kpiHTML(); updateCells(); drawMain(); drawMonthly(); drawBreakeven(); }
+// ===== Окупаемость и прогноз до конца года =====
+const TL=['Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек','Янв*','Фев*'];
+const SHIP_HIST=[551407,1695820,558602,797276];   // факт отгрузки, с НДС
+const COGS_HIST=[323557,975134,325800,460514];     // факт себестоимость, с НДС
+const COST_RATIO=2085004/3603105;                  // доля себестоимости в выручке (с НДС)
+const AR_NOW=1011635;                              // не оплачено на 23.06.2026 (факт)
+let chartPay,chartForecast;
+
+function monthShares(D){ // распределение оплаты месяца отгрузки по календарным месяцам
+  const L=30,out=[];
+  for(let off=0;off<=3;off++){
+    const lo=Math.max(0,off*L-D), hi=Math.min(L,(off+1)*L-D), share=Math.max(0,hi-lo)/L;
+    if(share>0) out.push({off,share});
+  }
+  return out;
+}
+
+function buildTimeline(){
+  const base=parseFloat($("baseRun").value)||0;
+  const g=(parseFloat($("growthPct").value)||0)/100;
+  const D=parseFloat($("deferDays").value)||0;
+  const v=vat(), fixed=opexTotal();
+  const ship=SHIP_HIST.slice(), cogs=COGS_HIST.slice();
+  for(let k=0;k<6;k++){const s=base*Math.pow(1+g,k); ship.push(s); cogs.push(s*COST_RATIO);}
+  ship.push(0,0); cogs.push(0,0); // Янв,Фев — только хвост оплат
+  const n=ship.length, coll=new Array(n).fill(0), shares=monthShares(D);
+  for(let m=0;m<10;m++) shares.forEach(s=>{ if(m+s.off<n) coll[m+s.off]+=ship[m]*s.share; });
+  const out=new Array(n).fill(0);
+  for(let i=0;i<10;i++) out[i]=cogs[i];
+  out[0]+=fixed;
+  let cumOut=0,cumIn=0,cumGP=0,cashPB=null,profPB=null;
+  const cumOutA=[],cumInA=[],cumGPA=[],netCashA=[];
+  for(let i=0;i<n;i++){
+    cumOut+=out[i]; cumIn+=coll[i]; cumGP+=(ship[i]-cogs[i])/(1+v);
+    cumOutA.push(cumOut); cumInA.push(cumIn); cumGPA.push(cumGP); netCashA.push(cumIn-cumOut);
+    if(cashPB===null&&i>0&&cumIn-cumOut>=0) cashPB=TL[i];
+    if(profPB===null&&cumGP>=fixed) profPB=TL[i];
+  }
+  return {ship,cogs,coll,cumOutA,cumInA,cumGPA,netCashA,cashPB,profPB,fixed,v};
+}
+
+function drawPayback(){
+  const t=buildTimeline(), dec=9;
+  const invY=t.cumOutA[dec], gpY=t.cumGPA[dec], netProfit=gpY-t.fixed, roi=invY>0?netProfit/invY*100:0;
+  $("payKpis").innerHTML=`
+    <div class="kpi k3"><div class="lbl">Кэш-окупаемость</div><div class="val">${t.cashPB||'—'}</div><div class="delta">чистый кэшфлоу ≥ 0</div></div>
+    <div class="kpi k2"><div class="lbl">Возврат по прибыли</div><div class="val">${t.profPB||'—'}</div><div class="delta">накопл. ВП ≥ разовых затрат</div></div>
+    <div class="kpi k4"><div class="lbl">Инвестиции к дек.</div><div class="val">${fmt(invY)} ₽</div><div class="delta">себест.+логистика+декл.</div></div>
+    <div class="kpi k3"><div class="lbl">Чистая прибыль (год)</div><div class="val" style="color:var(--good)">${fmt(netProfit)} ₽</div><div class="delta">ROI ${roi.toFixed(0)}%</div></div>
+    <div class="kpi k5"><div class="lbl">Не оплачено сейчас</div><div class="val">${fmt(AR_NOW)} ₽</div><div class="delta">дебиторка на 23.06</div></div>`;
+  if(chartPay)chartPay.destroy();
+  chartPay=new Chart($("chartPay"),{data:{labels:TL,datasets:[
+    {type:'bar',label:'Чистый кэш (накопл.)',data:t.netCashA.map(Math.round),backgroundColor:t.netCashA.map(x=>x>=0?'rgba(76,175,125,.35)':'rgba(216,102,95,.35)'),order:3},
+    {type:'line',label:'Σ вложено (инвестиции)',data:t.cumOutA.map(Math.round),borderColor:'#d8665f',pointRadius:0,tension:.1,order:1},
+    {type:'line',label:'Σ оплат (кэшфлоу)',data:t.cumInA.map(Math.round),borderColor:'#5aa7c8',pointRadius:0,tension:.1,order:1},
+    {type:'line',label:'Σ валовой прибыли',data:t.cumGPA.map(Math.round),borderColor:'#c8a15a',borderDash:[5,4],pointRadius:0,tension:.1,order:1}
+  ]},options:{plugins:{legend:{labels:{color:'#e8edf2'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.raw)+' ₽'}}},
+    scales:{x:{ticks:{color:'#e8edf2'},grid:{display:false}},y:{ticks:{color:'#8b9aab',callback:v=>fmt(v)},grid:{color:'#2e3a48'}}}}});
+  $("payNote").innerHTML=`Кэшфлоу (с НДС): оплаты приходят через ~${$("deferDays").value} дн после отгрузки. Инвестиции = себестоимость отгруженного (с НДС) + логистика + декларирование (разовые, в марте). Прибыль — валовая без НДС. ROI = чистая прибыль ÷ инвестиции. НДС ${$("vatRate").value}% в кэшфлоу проходит транзитом (в бюджет отдельно не выделен).`;
+}
+
+function drawForecast(){
+  const t=buildTimeline(), isF=i=>i>=4;
+  if(chartForecast)chartForecast.destroy();
+  chartForecast=new Chart($("chartForecast"),{type:'bar',data:{labels:TL.slice(0,10),datasets:[
+    {label:'Отгрузка',data:t.ship.slice(0,10).map(Math.round),backgroundColor:t.ship.slice(0,10).map((_,i)=>isF(i)?'rgba(200,161,90,.5)':'#c8a15a'),borderRadius:4},
+    {label:'Оплаты',data:t.coll.slice(0,10).map(Math.round),backgroundColor:t.coll.slice(0,10).map((_,i)=>isF(i)?'rgba(90,167,200,.5)':'#5aa7c8'),borderRadius:4}
+  ]},options:{plugins:{legend:{labels:{color:'#e8edf2'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.raw)+' ₽'}}},
+    scales:{x:{ticks:{color:'#e8edf2'},grid:{display:false}},y:{ticks:{color:'#8b9aab',callback:v=>fmt(v)},grid:{color:'#2e3a48'}}}}});
+  let h=`<thead><tr><th>Месяц</th><th>Отгрузка, ₽</th><th>Оплаты, ₽</th><th>Σ оплат</th><th>Σ вложено</th><th>Чистый кэш</th></tr></thead><tbody>`;
+  t.ship.forEach((s,i)=>{
+    const tag=i<4?' (факт)':(i<10?' (прогноз)':'');
+    h+=`<tr${i>=4&&i<10?' style="color:var(--muted)"':''}><td>${TL[i]}${tag}</td>
+      <td>${i<10?fmt(s):'—'}</td><td>${fmt(t.coll[i])}</td><td>${fmt(t.cumInA[i])}</td>
+      <td>${fmt(t.cumOutA[i])}</td><td style="color:${t.netCashA[i]>=0?'var(--good)':'var(--bad)'}">${fmt(t.netCashA[i])}</td></tr>`;
+  });
+  $("fcTbl").innerHTML=h+`</tbody>`;
+}
+
+
+// ===== Окупаемость по чистой прибыли =====
+let chartNetProfit;
+function drawNetProfit(){
+  const t=buildTimeline();
+  const peak=Math.max(0,-Math.min.apply(null,t.netCashA)); // макс. отрицательный накопл. чистый кэш
+  const mode=$("npBaseMode").value;
+  const base = mode==='peak'?peak : mode==='fixed'?t.fixed : (parseFloat($("npBaseManual").value)||0);
+  const cumNP=t.cumGPA.map(x=>x-t.fixed);            // накопл. чистая прибыль
+  const monthNP=[];
+  for(let i=0;i<t.ship.length;i++){ const gp=(t.ship[i]-t.cogs[i])/(1+t.v); monthNP.push(gp-(i===0?t.fixed:0)); }
+  let pb=null;
+  for(let i=0;i<cumNP.length;i++){ if(cumNP[i]>=base){ pb=TL[i]; break; } }
+  const dec=9, npNow=cumNP[3], npDec=cumNP[dec];
+  let fcAvg=0; for(let i=4;i<10;i++) fcAvg+=monthNP[i]; fcAvg/=6;
+  const baseLbl = mode==='peak'?'пиковый вложенный капитал':mode==='fixed'?'разовые расходы':'задано вручную';
+  $("npKpis").innerHTML=`
+    <div class="kpi k3"><div class="lbl">Окупаемость по чистой прибыли</div><div class="val">${pb||'—'}</div><div class="delta">накопл. ЧП ≥ планки</div></div>
+    <div class="kpi k5"><div class="lbl">Планка возврата</div><div class="val">${fmt(base)} ₽</div><div class="delta">${baseLbl}</div></div>
+    <div class="kpi k3"><div class="lbl">Чистая прибыль к дек.</div><div class="val" style="color:var(--good)">${fmt(npDec)} ₽</div><div class="delta">накопительно за год</div></div>
+    <div class="kpi k2"><div class="lbl">Чистая прибыль сейчас</div><div class="val">${fmt(npNow)} ₽</div><div class="delta">накоплено к июню (факт)</div></div>
+    <div class="kpi k4"><div class="lbl">Ср. чистая прибыль/мес</div><div class="val">${fmt(fcAvg)} ₽</div><div class="delta">прогноз июл–дек</div></div>`;
+  const thr=TL.map(()=>Math.round(base));
+  if(chartNetProfit)chartNetProfit.destroy();
+  chartNetProfit=new Chart($("chartNetProfit"),{data:{labels:TL,datasets:[
+    {type:'bar',label:'Чистая прибыль за месяц',data:monthNP.map(Math.round),backgroundColor:monthNP.map(x=>x>=0?'rgba(76,175,125,.45)':'rgba(216,102,95,.5)'),order:3},
+    {type:'line',label:'Накопл. чистая прибыль',data:cumNP.map(Math.round),borderColor:'#4caf7d',pointRadius:0,tension:.1,order:1},
+    {type:'line',label:'Планка возврата',data:thr,borderColor:'#d8665f',borderDash:[6,4],pointRadius:0,order:1}
+  ]},options:{plugins:{legend:{labels:{color:'#e8edf2'}},tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.raw)+' ₽'}}},
+    scales:{x:{ticks:{color:'#e8edf2'},grid:{display:false}},y:{ticks:{color:'#8b9aab',callback:v=>fmt(v)},grid:{color:'#2e3a48'}}}}});
+  $("npNote").innerHTML=`Чистая прибыль = валовая прибыль (без НДС) − разовые расходы (логистика+декларирование, ${fmt(t.fixed)} ₽, списаны в марте). Проект окупается по чистой прибыли в <b>${pb||'—'}</b>, когда накопленная чистая прибыль перекрывает планку ${fmt(base)} ₽ (${baseLbl}). Пиковый вложенный капитал = максимум, на который проект уходил в минус по живым деньгам.`;
+}
+
+
+function render(){ kpiHTML(); buildTable(); drawMain(); drawMonthly(); drawBreakeven(); drawPayback(); drawForecast(); drawNetProfit(); }
+function recalc(){ kpiHTML(); updateCells(); drawMain(); drawMonthly(); drawBreakeven(); drawPayback(); drawForecast(); drawNetProfit(); }
 
 function bindSeg(id,cb){
   $(id).querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
@@ -418,9 +567,11 @@ bindSeg("segVat",v=>{vatMode=v;render();});
 bindSeg("segMetric",v=>{monthMetric=v;drawMonthly();});
 $("vatRate").addEventListener("input",render);
 ["opexLog","opexDecl","opexOther"].forEach(id=>$(id).addEventListener("input",recalc));
+["baseRun","growthPct","deferDays"].forEach(id=>$(id).addEventListener("input",()=>{drawPayback();drawForecast();drawNetProfit();}));
+["npBaseMode","npBaseManual"].forEach(id=>$(id).addEventListener("input",drawNetProfit));
 $("btnReset").addEventListener("click",()=>{
   state=structuredClone(BASE);
-  $("opexLog").value=221430;$("opexDecl").value=32000;$("opexOther").value=0;$("vatRate").value=20;
+  $("opexLog").value=221430;$("opexDecl").value=32000;$("opexOther").value=0;$("vatRate").value=22;$("baseRun").value=635762;$("growthPct").value=0;$("deferDays").value=40;$("npBaseMode").value="peak";$("npBaseManual").value="";
   filterChain="all";filterCat="all";vatMode="net";monthMetric="rev";
   ["segChain","segCat","segVat","segMetric"].forEach(id=>{const bs=$(id).querySelectorAll("button");bs.forEach((b,i)=>b.classList.toggle("active",i===0));});
   render();
@@ -430,3 +581,4 @@ render();
 </script>
 </body>
 </html>
+
