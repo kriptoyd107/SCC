@@ -230,25 +230,25 @@
 // ===== Базовые данные (без НДС): [название, категория, себестоимость/ед, цена/ед, объём шт] =====
 const BASE = [
   ["Азбука Вкуса", [
-    ["RAF Vanilla «3 в 1» 20г","3в1",13.63,17.62,2400],
-    ["RAF Lavender «3 в 1» 20г","3в1",11.31,16.88,1280],
-    ["RAF Citrus «3 в 1» 20г","3в1",11.39,16.67,800],
-    ["FLAT WHITE «3 в 1» 20г","3в1",13.57,17.48,2960],
-    ["Капсулы DEEP VANILLA 10шт","Капсулы",102.78,225,570],
-    ["Капсулы WHOLE HAZELNUT 10шт","Капсулы",111.10,225,450],
-    ["Капсулы IRISH CREAM 10шт","Капсулы",130.31,225,2310],
-    ["Капсулы CHOCOLATE-ORANGE 10шт","Капсулы",127.26,225,2130],
-    ["Капсулы CHOCOLATE-COCONUT 10шт","Капсулы",93.38,225,1080],
-    ["Raf Coffee Vanilla 10кап","Капсулы",115.90,365.60,10],
+    ["RAF Vanilla «3 в 1» 20г","3в1",13.98,17.62,3120,17.05,21.7],
+    ["RAF Lavender «3 в 1» 20г","3в1",11.97,16.88,1520,14.6,20.87],
+    ["RAF Citrus «3 в 1» 20г","3в1",11.97,16.67,1040,14.6,20.81],
+    ["FLAT WHITE «3 в 1» 20г","3в1",13.98,17.48,4080,17.07,21.62],
+    ["Капсулы DEEP VANILLA 10шт","Капсулы",122.7,225,900,149.69,274.5],
+    ["Капсулы WHOLE HAZELNUT 10шт","Капсулы",122.7,225,570,149.69,274.5],
+    ["Капсулы IRISH CREAM 10шт","Капсулы",130.31,225,3270,158.98,274.5],
+    ["Капсулы CHOCOLATE-ORANGE 10шт","Капсулы",127.26,225,2790,155.26,274.5],
+    ["Капсулы CHOCOLATE-COCONUT 10шт","Капсулы",127.26,225,1590,155.26,274.5],
+    ["Raf Coffee Vanilla 10кап","Капсулы",192.63,365.6,10,235.01,446.03],
   ]],
   ["Гиперглобус", [
-    ["RAF Vanilla «3 в 1» 20г","3в1",13.63,20.83,4000],
-    ["RAF Lavender «3 в 1» 20г","3в1",11.85,20.83,4080],
-    ["RAF Citrus «3 в 1» 20г","3в1",11.85,20.83,3920],
-    ["FLAT WHITE «3 в 1» 20г","3в1",13.57,20.83,4000],
-    ["Американо DG","Капсулы",241.52,412.50,330],
-    ["Raf Coffee Lavander 10кап","Капсулы",120.44,404.16,270],
-    ["Raf Coffee Citrus 10кап","Капсулы",120.76,404.16,290],
+    ["RAF Vanilla «3 в 1» 20г","3в1",13.98,20.83,4240,17.05,25.41],
+    ["RAF Lavender «3 в 1» 20г","3в1",11.97,20.83,4480,14.6,25.41],
+    ["RAF Citrus «3 в 1» 20г","3в1",11.97,20.83,4160,14.6,25.41],
+    ["FLAT WHITE «3 в 1» 20г","3в1",13.98,20.83,4000,17.05,25.41],
+    ["Американо DG","Капсулы",241.52,412.5,330,294.65,503.25],
+    ["Raf Coffee Lavander 10кап","Капсулы",192.63,404.16,290,235.01,493.08],
+    ["Raf Coffee Citrus 10кап","Капсулы",192.63,404.16,300,235.01,493.08],
   ]],
 ];
 
@@ -288,12 +288,13 @@ function opexTotal(){return (parseFloat($("opexLog").value)||0)+(parseFloat($("o
 
 // строки с учётом фильтров
 function rows(){
-  let out=[];
+  let out=[]; const G=vatMode==="gross";
   state.forEach(([chain,items])=>{
     if(filterChain!=="all"&&chain!==filterChain)return;
     items.forEach((it,i)=>{
       if(filterCat!=="all"&&it[1]!==filterCat)return;
-      const [name,cat,c,p,q]=it;
+      const [name,cat,cN,pN,q,cG,pG]=it;
+      const c=G?cG:cN, p=G?pG:pN;
       out.push({chain,idx:i,name,cat,c,p,q,rev:p*q,cost:c*q,vp:(p-c)*q,m:p>0?(p-c)/p*100:0});
     });
   });
@@ -303,7 +304,7 @@ function rows(){
 let chartVP,chartChain,chartPie,chartMonth,chartBE;
 
 function kpiHTML(){
-  const rs=rows(),k=gmul();
+  const rs=rows(),k=1;
   let gRev=0,gCost=0,gVP=0; rs.forEach(r=>{gRev+=r.rev;gCost+=r.cost;gVP+=r.vp;});
   const opex=opexTotal(), grossM=gRev>0?gVP/gRev*100:0, net=gVP-opex, netM=gRev>0?net/gRev*100:0;
   $("kpis").innerHTML=`
@@ -315,7 +316,7 @@ function kpiHTML(){
 }
 
 function buildTable(){
-  const rs=rows(),k=gmul();
+  const rs=rows(),k=1;
   $("tbl").querySelector("thead").innerHTML=`<tr><th>SKU</th><th>Себест/ед</th><th>Цена/ед</th><th>Кол-во</th><th>Выручка</th><th>Себест-ть</th><th>Вал. прибыль</th><th>Рент. %</th></tr>`;
   const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
   let chains=[...new Set(rs.map(r=>r.chain))];
@@ -327,8 +328,8 @@ function buildTable(){
       sRev+=r.rev;sCost+=r.cost;sVP+=r.vp;sQ+=r.q;
       tb.insertAdjacentHTML("beforeend",`<tr>
         <td>${r.name}</td>
-        <td><input type="number" step="0.01" data-c="${r.chain}" data-i="${r.idx}" data-f="2" value="${r.c}"></td>
-        <td><input type="number" step="0.01" data-c="${r.chain}" data-i="${r.idx}" data-f="3" value="${r.p}"></td>
+        <td><input type="number" step="0.01" data-c="${r.chain}" data-i="${r.idx}" data-f="${vatMode==='gross'?5:2}" value="${r.c}"></td>
+        <td><input type="number" step="0.01" data-c="${r.chain}" data-i="${r.idx}" data-f="${vatMode==='gross'?6:3}" value="${r.p}"></td>
         <td><input type="number" step="10" data-c="${r.chain}" data-i="${r.idx}" data-f="4" value="${r.q}"></td>
         <td>${fmt(r.rev*k)}</td><td>${fmt(r.cost*k)}</td><td>${fmt(r.vp*k)}</td>
         <td class="mcell ${mClass(r.m)}">${r.m.toFixed(1)}%</td></tr>`);
@@ -341,8 +342,9 @@ function buildTable(){
   });
   tb.querySelectorAll("input").forEach(inp=>{
     inp.addEventListener("input",e=>{
-      const ch=e.target.dataset.c, i=+e.target.dataset.i, f=+e.target.dataset.f;
-      state.find(x=>x[0]===ch)[1][i][f]=parseFloat(e.target.value)||0;
+      const ch=e.target.dataset.c, i=+e.target.dataset.i, f=+e.target.dataset.f, val=parseFloat(e.target.value)||0;
+      const row=state.find(x=>x[0]===ch)[1][i]; row[f]=val; const _v=vat();
+      if(f===2)row[5]=val*(1+_v); else if(f===3)row[6]=val*(1+_v); else if(f===5)row[2]=val/(1+_v); else if(f===6)row[3]=val/(1+_v);
       recalc();
     });
   });
@@ -350,7 +352,7 @@ function buildTable(){
 
 // обновить вычисляемые ячейки таблицы без пересборки (сохраняет фокус инпута)
 function updateCells(){
-  const k=gmul(), rs=rows();
+  const k=1, rs=rows();
   let chains=[...new Set(rs.map(r=>r.chain))], cells=[];
   chains.forEach(ch=>{ cells.push({t:"h"}); rs.filter(r=>r.chain===ch).forEach(r=>cells.push({t:"d",r})); cells.push({t:"s",ch}); });
   $("tbl").querySelectorAll("tbody tr").forEach((tr,i)=>{
@@ -369,7 +371,7 @@ function updateCells(){
 }
 
 function drawMain(){
-  const rs=rows(),k=gmul();
+  const rs=rows(),k=1;
   const top=[...rs].sort((a,b)=>b.vp-a.vp).slice(0,12);
   const labels=top.map(r=>r.name.length>26?r.name.slice(0,25)+"…":r.name);
   const vals=top.map(r=>Math.round(r.vp*k));
@@ -581,4 +583,3 @@ render();
 </script>
 </body>
 </html>
-
